@@ -29,6 +29,7 @@ jobs:
 #        gradle wrapper
     - name: check java version
       run: |
+        sdk use java 17.0.3.6.1-amzn
         echo $JAVA_HOME
         java -version
         which java
