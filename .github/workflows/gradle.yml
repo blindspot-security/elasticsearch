@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: demo
     steps:
-    - uses: actions/checkout@v2
+#    - uses: actions/checkout@v2
     - name: Install Java & Gradle
       run: |
         curl -s "https://get.sdkman.io" | bash
@@ -27,6 +27,11 @@ jobs:
         sdk install java 17.0.3.6.1-amzn
 #        sdk install gradle 7.4.2
 #        gradle wrapper
+    - name: check java version
+      run: |
+        echo $JAVA_HOME
+        java -version
+        which java
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 #    - name: Upload Test Coverage
