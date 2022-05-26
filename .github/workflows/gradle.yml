@@ -26,7 +26,7 @@ jobs:
         source "/home/runner/.sdkman/bin/sdkman-init.sh"
         sdk install java 17.0.3-oracle
 #        sdk install gradle 7.4.2
-        gradle wrapper
+#        gradle wrapper
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 #    - name: Upload Test Coverage
