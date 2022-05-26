@@ -5,10 +5,16 @@
  * in compliance with, at your election, the Elastic License 2.0 or the Server
  * Side Public License, v 1.
  */
+repositories {
+  flatDir {
+    dirs 'ext-libs'
+  }
+  mavenCentral()
+
+}
 
 dependencies {
-  compile files('ext-libs/joni.jar')
-//  api 'org.jruby.joni:joni:2.1.29'
+  implementation 'org.jruby.joni:joni:2.1.29'
   // joni dependencies:
   api 'org.jruby.jcodings:jcodings:1.0.44'
 
