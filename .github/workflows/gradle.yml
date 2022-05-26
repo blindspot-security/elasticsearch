@@ -21,6 +21,7 @@ jobs:
     steps:
 #    - uses: actions/checkout@v2
     - name: Install Java & Gradle
+      id: sdkman
       run: |
         curl -s "https://get.sdkman.io" | bash
         source "/home/runner/.sdkman/bin/sdkman-init.sh"
@@ -29,6 +30,7 @@ jobs:
 #        gradle wrapper
     - name: check java version
       run: |
+        source "/home/runner/.sdkman/bin/sdkman-init.sh"
         sdk use java 17.0.3.6.1-amzn
         echo $JAVA_HOME
         java -version
