@@ -32,6 +32,7 @@ jobs:
         echo $JAVA_HOME
         java -version
         which java
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 #    - name: Upload Test Coverage
