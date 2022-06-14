@@ -9,7 +9,7 @@ env:
   GITHUBRUNID: ${{ github.run_id }}
 
 jobs:
-  build:
+  Build:
     name: Build
     runs-on: ubuntu-latest
     environment: demo
@@ -28,3 +28,28 @@ jobs:
         source "/home/runner/.sdkman/bin/sdkman-init.sh"
         sdk use java 17.0.3.6.1-amzn
         ./gradlew localDistro
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: grok
+        path: libs/grok/build/distributions/
+
+  ScanWithVirusTotal:
+    - uses: actions/download-artifact@v3
+      with:
+        name: grok
+        path: grok_artifact
+    - name: VirusTotal Scan
+      uses: crazy-max/ghaction-virustotal@v3
+      with:
+        vt_api_key: ${{ secrets.VT_API_TOKEN }}
+        files: |
+          ./grok_artifact/.jar$
+
+  Release:
+    name: Release
+    runs-on: ubuntu-latest
+    environment: demo
+    steps:
+      - name: Grant execute permission for gradlew
+        run: echo "Releasing"
