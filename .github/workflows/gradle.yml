@@ -36,6 +36,7 @@ jobs:
 
   ScanWithVirusTotal:
     name: ScanWithVirusTotal
+    needs: Build
     runs-on: ubuntu-latest
     environment: demo
     steps:
@@ -52,6 +53,7 @@ jobs:
 
   Release:
     name: Release
+    needs: ScanWithVirusTotal
     runs-on: ubuntu-latest
     environment: demo
     steps:
