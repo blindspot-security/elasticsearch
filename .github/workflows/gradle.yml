@@ -44,12 +44,15 @@ jobs:
         with:
           name: grok
           path: grok_artifact
+      - name: Display structure of downloaded files
+        run: ls -R
+        working-directory: ./grok_artifact/
       - name: VirusTotal Scan
         uses: crazy-max/ghaction-virustotal@v3
         with:
           vt_api_key: ${{ secrets.VT_API_TOKEN }}
           files: |
-            ./grok_artifact/.jar$
+            ./grok_artifact/*.jar
 
   Release:
     name: Release
