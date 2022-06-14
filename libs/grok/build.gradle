@@ -5,16 +5,9 @@
  * in compliance with, at your election, the Elastic License 2.0 or the Server
  * Side Public License, v 1.
  */
-repositories {
-  flatDir {
-    dirs 'ext-libs'
-  }
-  mavenCentral()
-
-}
 
 dependencies {
-  implementation 'org.jruby.joni:joni:2.1.29'
+  api 'io.github.blindspot-security:joni:2.1.44'
   // joni dependencies:
   api 'org.jruby.jcodings:jcodings:1.0.44'
 
