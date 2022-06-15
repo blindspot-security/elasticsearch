@@ -12,7 +12,7 @@ dependencies {
     exclude group: 'org.elasticsearch', module: 'elasticsearch-grok'
   }
   // joni regex parser
-  api 'io.github.blindspot-security:joni:2.1.58'
+  api 'io.github.blindspot-security:joni:2.5.8'
 }
 
 tasks.named("forbiddenPatterns").configure {
