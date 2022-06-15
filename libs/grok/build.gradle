@@ -7,10 +7,6 @@
  */
 
 dependencies {
-  api 'io.github.blindspot-security:joni:2.1.44'
-  // joni dependencies:
-  api 'org.jruby.jcodings:jcodings:1.0.44'
-
   testImplementation(project(":test:framework")) {
     exclude group: 'org.elasticsearch', module: 'elasticsearch-grok'
   }
@@ -23,4 +19,3 @@ tasks.named("forbiddenPatterns").configure {
 tasks.named('forbiddenApisMain').configure {
   replaceSignatureFiles 'jdk-signatures'
 }
-
