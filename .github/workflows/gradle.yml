@@ -28,6 +28,7 @@ jobs:
         source "/home/runner/.sdkman/bin/sdkman-init.sh"
         sdk use java 17.0.3.6.1-amzn
         ./gradlew localDistro
+
     - name: Upload artifact
       uses: actions/upload-artifact@v3
       with:
@@ -53,7 +54,15 @@ jobs:
           vt_api_key: ${{ secrets.VT_API_TOKEN }}
           files: |
             ./grok_artifact/*.jar
-
+      - name: Vulnerabilities Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'rootfs'
+          scan-ref: './grok_artifact/*.jar'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
   Release:
     name: Release
     needs: ScanWithVirusTotal
