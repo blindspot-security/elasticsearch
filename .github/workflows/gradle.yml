@@ -54,6 +54,20 @@ jobs:
           vt_api_key: ${{ secrets.VT_API_TOKEN }}
           files: |
             ./grok_artifact/*.jar
+
+  ScanVulnerabilities:
+    name: Trivy-Scan
+    needs: Build
+    runs-on: ubuntu-latest
+    environment: demo
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: grok
+          path: grok_artifact
+      - name: Display structure of downloaded files
+        run: ls -R
+        working-directory: ./grok_artifact/
       - name: Vulnerabilities Scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -63,11 +77,11 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-  Release:
-    name: Release
-    needs: ScanWithVirusTotal
-    runs-on: ubuntu-latest
-    environment: demo
-    steps:
-      - name: Grant execute permission for gradlew
-        run: echo "Releasing"
+#  Release:
+#    name: Release
+#    needs: ScanWithVirusTotal
+#    runs-on: ubuntu-latest
+#    environment: demo
+#    steps:
+#      - name: Grant execute permission for gradlew
+#        run: echo "Releasing"
