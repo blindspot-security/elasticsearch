@@ -24,10 +24,14 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
     - name: Build with Gradle
-      run: |
-        source "/home/runner/.sdkman/bin/sdkman-init.sh"
-        sdk use java 17.0.3.6.1-amzn
-        ./gradlew localDistro
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: localDistro
+#    - name: Build with Gradle
+#      run: |
+#        source "/home/runner/.sdkman/bin/sdkman-init.sh"
+#        sdk use java 17.0.3.6.1-amzn
+#        ./gradlew localDistro
 
     - name: Upload artifact
       uses: actions/upload-artifact@v3
