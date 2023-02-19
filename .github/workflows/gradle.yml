@@ -73,9 +73,6 @@ jobs:
         with:
           scan-type: 'rootfs'
           scan-ref: './grok_artifact/*.jar'
-          ignore-unfixed: true
-          format: 'sarif'
-          output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
 #  Release:
 #    name: Release
