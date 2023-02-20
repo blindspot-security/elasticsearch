@@ -26,6 +26,8 @@ jobs:
       run: chmod +x gradlew
     - name: Setup Gradle For Caching
       uses: gradle/gradle-build-action@v2
+      with:
+        cache-read-only: false
     - name: Build with Gradle
       run: |
         source "/home/runner/.sdkman/bin/sdkman-init.sh"
@@ -77,6 +79,26 @@ jobs:
           scan-type: 'rootfs'
           scan-ref: './grok_artifact/*.jar'
           severity: 'CRITICAL,HIGH'
+
+  SnykSca:
+    name: SnykScan
+    needs: Build
+    runs-on: ubuntu-latest
+    environment: demo
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: grok
+          path: grok_artifact
+      - name: Display structure of downloaded files
+        run: ls -R
+        working-directory: ./grok_artifact/
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/gradle-jdk17@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
 #  Release:
 #    name: Release
 #    needs: ScanWithVirusTotal
