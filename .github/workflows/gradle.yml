@@ -80,6 +80,37 @@ jobs:
           scan-ref: './grok_artifact/*.jar'
           severity: 'CRITICAL,HIGH'
 
+  BspotAction:
+    needs: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out blindspot action
+        uses: actions/checkout@v3
+        with:
+          repository: blindspot-security/blindspot-action
+          ref: feature/update-action
+          token: ${{ secrets.PAT }}
+          path: ./blindspot-action
+      - name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: grok/*.jar
+          path: artifact
+      - name: list of folder after build
+        run: ls -R
+      - name: Blindspot Security Action
+        id: blindspot
+        uses: ./blindspot-action
+        # timeout-minutes: 5 // Uncomment to limit step run.
+        with:
+          api_token: ${{ secrets.BS_TOKEN }}
+          organization: ${{ secrets.BS_ORGANIZATION }}
+          credentials: ${{ secrets.BS_CREDS }}
+          api_url: ${{ secrets.BS_API }}
+          artifact_path: artifact
+
 #  Release:
 #    name: Release
 #    needs: ScanWithVirusTotal
