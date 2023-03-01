@@ -96,7 +96,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v3
         with:
-          name: grok/*.jar
+          name: grok
           path: artifact
       - name: list of folder after build
         run: ls -R
