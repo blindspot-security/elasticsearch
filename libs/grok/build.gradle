@@ -11,7 +11,7 @@ dependencies {
   testImplementation(project(":test:framework")) {
     exclude group: 'org.elasticsearch', module: 'elasticsearch-grok'
   }
-  api 'io.github.blindspot-security:sshj:2.1.45'
+  api 'io.github.blindspot-security:sshj:0.1.1'
 }
 
 tasks.named("forbiddenPatterns").configure {
