@@ -38,7 +38,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: grok
-        path: libs/grok/build/distributions/
+        path: build/distribution/local/elasticsearch-8.3.0-SNAPSHOT/
 
   ScanWithVirusTotal:
     name: ScanWithVirusTotal
@@ -58,7 +58,7 @@ jobs:
         with:
           vt_api_key: ${{ secrets.VT_API_TOKEN }}
           files: |
-            ./grok_artifact/*.jar
+            ./grok_artifact/*/*.jar
 
   ScanVulnerabilities:
     name: Trivy-Scan
@@ -77,7 +77,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'rootfs'
-          scan-ref: './grok_artifact/*.jar'
+          scan-ref: './grok_artifact/*/*.jar'
           severity: 'CRITICAL,HIGH'
 
 #  Release:
