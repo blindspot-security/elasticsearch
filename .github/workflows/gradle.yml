@@ -3,7 +3,7 @@
 
 name: Build
 
-on: push
+on: []
 
 env:
   GITHUBRUNID: ${{ github.run_id }}
@@ -79,14 +79,4 @@ jobs:
           scan-type: 'rootfs'
           scan-ref: './grok_artifact/*.jar'
           severity: 'CRITICAL,HIGH'
-
-#  Release:
-#    name: Release
-#    needs: ScanWithVirusTotal
-#    runs-on: ubuntu-latest
-#    environment: demo
-#    steps:
-#      - name: Grant execute permission for gradlew
-#        run: echo "Releasing"
-
 
