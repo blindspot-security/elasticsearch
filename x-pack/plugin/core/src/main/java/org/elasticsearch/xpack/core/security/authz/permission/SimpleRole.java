@@ -8,26 +8,34 @@ package org.elasticsearch.xpack.core.security.authz.permission;
 
 import org.apache.lucene.util.automaton.Automaton;
 import org.elasticsearch.cluster.metadata.IndexAbstraction;
+import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.xpack.core.security.authc.Authentication;
 import org.elasticsearch.xpack.core.security.authz.AuthorizationEngine.PrivilegesCheckResult;
 import org.elasticsearch.xpack.core.security.authz.AuthorizationEngine.PrivilegesToCheck;
+import org.elasticsearch.xpack.core.security.authz.RoleDescriptor;
+import org.elasticsearch.xpack.core.security.authz.RoleDescriptorsIntersection;
 import org.elasticsearch.xpack.core.security.authz.accesscontrol.IndicesAccessControl;
+import org.elasticsearch.xpack.core.security.authz.permission.IndicesPermission.IsResourceAuthorizedPredicate;
 import org.elasticsearch.xpack.core.security.authz.privilege.ApplicationPrivilegeDescriptor;
 import org.elasticsearch.xpack.core.security.authz.privilege.ClusterPrivilege;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 public class SimpleRole implements Role {
 
@@ -42,19 +50,22 @@ public class SimpleRole implements Role {
     private final IndicesPermission indices;
     private final ApplicationPermission application;
     private final RunAsPermission runAs;
+    private final RemoteIndicesPermission remoteIndices;
 
     SimpleRole(
         String[] names,
         ClusterPermission cluster,
         IndicesPermission indices,
         ApplicationPermission application,
-        RunAsPermission runAs
+        RunAsPermission runAs,
+        RemoteIndicesPermission remoteIndices
     ) {
         this.names = names;
         this.cluster = Objects.requireNonNull(cluster);
         this.indices = Objects.requireNonNull(indices);
         this.application = Objects.requireNonNull(application);
         this.runAs = Objects.requireNonNull(runAs);
+        this.remoteIndices = Objects.requireNonNull(remoteIndices);
     }
 
     @Override
@@ -83,12 +94,17 @@ public class SimpleRole implements Role {
     }
 
     @Override
+    public RemoteIndicesPermission remoteIndices() {
+        return remoteIndices;
+    }
+
+    @Override
     public boolean hasFieldOrDocumentLevelSecurity() {
         return indices.hasFieldOrDocumentLevelSecurity();
     }
 
     @Override
-    public Predicate<IndexAbstraction> allowedIndicesMatcher(String action) {
+    public IsResourceAuthorizedPredicate allowedIndicesMatcher(String action) {
         return indices.allowedIndicesMatcher(action);
     }
 
@@ -108,12 +124,18 @@ public class SimpleRole implements Role {
     }
 
     @Override
-    public ResourcePrivilegesMap checkIndicesPrivileges(
+    public boolean checkIndicesPrivileges(
         Set<String> checkForIndexPatterns,
         boolean allowRestrictedIndices,
-        Set<String> checkForPrivileges
+        Set<String> checkForPrivileges,
+        @Nullable ResourcePrivilegesMap.Builder resourcePrivilegesMapBuilder
     ) {
-        return indices.checkResourcePrivileges(checkForIndexPatterns, allowRestrictedIndices, checkForPrivileges);
+        return indices.checkResourcePrivileges(
+            checkForIndexPatterns,
+            allowRestrictedIndices,
+            checkForPrivileges,
+            resourcePrivilegesMapBuilder
+        );
     }
 
     @Override
@@ -127,13 +149,20 @@ public class SimpleRole implements Role {
     }
 
     @Override
-    public ResourcePrivilegesMap checkApplicationResourcePrivileges(
+    public boolean checkApplicationResourcePrivileges(
         final String applicationName,
         Set<String> checkForResources,
         Set<String> checkForPrivilegeNames,
-        Collection<ApplicationPrivilegeDescriptor> storedPrivileges
+        Collection<ApplicationPrivilegeDescriptor> storedPrivileges,
+        @Nullable ResourcePrivilegesMap.Builder resourcePrivilegesMapBuilder
     ) {
-        return application.checkResourcePrivileges(applicationName, checkForResources, checkForPrivilegeNames, storedPrivileges);
+        return application.checkResourcePrivileges(
+            applicationName,
+            checkForResources,
+            checkForPrivilegeNames,
+            storedPrivileges,
+            resourcePrivilegesMapBuilder
+        );
     }
 
     @Override
@@ -144,6 +173,74 @@ public class SimpleRole implements Role {
         FieldPermissionsCache fieldPermissionsCache
     ) {
         return indices.authorize(action, requestedIndicesOrAliases, aliasAndIndexLookup, fieldPermissionsCache);
+    }
+
+    @Override
+    public RoleDescriptorsIntersection getRoleDescriptorsIntersectionForRemoteCluster(final String remoteClusterAlias) {
+        final RemoteIndicesPermission remoteIndicesPermission = remoteIndices.forCluster(remoteClusterAlias);
+        if (remoteIndicesPermission.remoteIndicesGroups().isEmpty()) {
+            return RoleDescriptorsIntersection.EMPTY;
+        }
+        final List<RoleDescriptor.IndicesPrivileges> indicesPrivileges = new ArrayList<>();
+        for (RemoteIndicesPermission.RemoteIndicesGroup remoteIndicesGroup : remoteIndicesPermission.remoteIndicesGroups()) {
+            for (IndicesPermission.Group indicesGroup : remoteIndicesGroup.indicesPermissionGroups()) {
+                indicesPrivileges.add(toIndicesPrivileges(indicesGroup));
+            }
+        }
+
+        return new RoleDescriptorsIntersection(
+            new RoleDescriptor(
+                REMOTE_USER_ROLE_NAME,
+                null,
+                // The role descriptors constructed here may be cached in raw byte form, using a hash of their content as a
+                // cache key; we therefore need deterministic order when constructing them here, to ensure cache hits for
+                // equivalent role descriptors
+                indicesPrivileges.stream().sorted().toArray(RoleDescriptor.IndicesPrivileges[]::new),
+                null,
+                null,
+                null,
+                null,
+                null
+            )
+        );
+    }
+
+    private static Set<FieldPermissionsDefinition.FieldGrantExcludeGroup> getFieldGrantExcludeGroups(IndicesPermission.Group group) {
+        if (group.getFieldPermissions().hasFieldLevelSecurity()) {
+            final List<FieldPermissionsDefinition> fieldPermissionsDefinitions = group.getFieldPermissions()
+                .getFieldPermissionsDefinitions();
+            assert fieldPermissionsDefinitions.size() == 1
+                : "a simple role can only have up to one field permissions definition per remote indices privilege";
+            final FieldPermissionsDefinition definition = fieldPermissionsDefinitions.get(0);
+            return definition.getFieldGrantExcludeGroups();
+        } else {
+            return Collections.emptySet();
+        }
+    }
+
+    private static RoleDescriptor.IndicesPrivileges toIndicesPrivileges(final IndicesPermission.Group indicesGroup) {
+        final Set<BytesReference> queries = indicesGroup.getQuery();
+        final Set<FieldPermissionsDefinition.FieldGrantExcludeGroup> fieldGrantExcludeGroups = getFieldGrantExcludeGroups(indicesGroup);
+        assert queries == null || queries.size() <= 1
+            : "translation from an indices permission group to indices privileges supports up to one DLS query but multiple queries found";
+        assert fieldGrantExcludeGroups.size() <= 1
+            : "translation from an indices permission group to indices privileges supports up to one FLS field-grant-exclude group"
+                + " but multiple groups found";
+
+        final BytesReference query = (queries == null || false == queries.iterator().hasNext()) ? null : queries.iterator().next();
+        final RoleDescriptor.IndicesPrivileges.Builder builder = RoleDescriptor.IndicesPrivileges.builder()
+            // Sort because these index privileges will be part of role descriptors that may be cached in raw byte form;
+            // we need deterministic order to ensure cache hits for equivalent role descriptors
+            .indices(Arrays.stream(indicesGroup.indices()).sorted().collect(Collectors.toList()))
+            .privileges(indicesGroup.privilege().name().stream().sorted().collect(Collectors.toList()))
+            .allowRestrictedIndices(indicesGroup.allowRestrictedIndices())
+            .query(query);
+        if (false == fieldGrantExcludeGroups.isEmpty()) {
+            final FieldPermissionsDefinition.FieldGrantExcludeGroup fieldGrantExcludeGroup = fieldGrantExcludeGroups.iterator().next();
+            builder.grantedFields(fieldGrantExcludeGroup.getGrantedFields()).deniedFields(fieldGrantExcludeGroup.getExcludedFields());
+        }
+
+        return builder.build();
     }
 
     @Override
@@ -167,6 +264,11 @@ public class SimpleRole implements Role {
         int result = Objects.hash(cluster, indices, application, runAs);
         result = 31 * result + Arrays.hashCode(names);
         return result;
+    }
+
+    @Override
+    public String toString() {
+        return getClass().getName() + "{" + String.join(",", names) + "}";
     }
 
     private final AtomicReference<Cache<PrivilegesToCheck, PrivilegesCheckResult>> hasPrivilegesCacheReference = new AtomicReference<>();

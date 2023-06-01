@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.slm;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.cluster.snapshots.create.CreateSnapshotRequest;
@@ -20,13 +19,13 @@ import org.elasticsearch.cluster.ClusterStateUpdateTask;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.scheduler.SchedulerEngine;
 import org.elasticsearch.core.SuppressForbidden;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.snapshots.SnapshotException;
 import org.elasticsearch.snapshots.SnapshotInfo;
 import org.elasticsearch.xcontent.ToXContent;
 import org.elasticsearch.xpack.core.ClientHelper;
-import org.elasticsearch.xpack.core.scheduler.SchedulerEngine;
 import org.elasticsearch.xpack.core.slm.SnapshotInvocationRecord;
 import org.elasticsearch.xpack.core.slm.SnapshotLifecycleMetadata;
 import org.elasticsearch.xpack.core.slm.SnapshotLifecyclePolicyMetadata;
@@ -40,6 +39,9 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+
+import static org.elasticsearch.core.Strings.format;
+import static org.elasticsearch.xpack.core.ilm.LifecycleOperationMetadata.currentSLMMode;
 
 public class SnapshotLifecycleTask implements SchedulerEngine.Listener {
 
@@ -157,8 +159,8 @@ public class SnapshotLifecycleTask implements SchedulerEngine.Listener {
                     } catch (IOException ex) {
                         // This shouldn't happen unless there's an issue with serializing the original exception, which shouldn't happen
                         logger.error(
-                            new ParameterizedMessage(
-                                "failed to record snapshot creation failure for snapshot lifecycle policy [{}]",
+                            () -> format(
+                                "failed to record snapshot creation failure for snapshot lifecycle policy [%s]",
                                 policyMetadata.getPolicy().getId()
                             ),
                             e
@@ -275,13 +277,19 @@ public class SnapshotLifecycleTask implements SchedulerEngine.Listener {
                         exception.map(SnapshotLifecycleTask::exceptionToString).orElse(null)
                     )
                 );
+                newPolicyMetadata.setInvocationsSinceLastSuccess(policyMetadata.getInvocationsSinceLastSuccess() + 1L);
             } else {
                 stats.snapshotTaken(policyName);
                 newPolicyMetadata.setLastSuccess(new SnapshotInvocationRecord(snapshotName, snapshotStartTime, snapshotFinishTime, null));
+                newPolicyMetadata.setInvocationsSinceLastSuccess(0L);
             }
 
             snapLifecycles.put(policyName, newPolicyMetadata.build());
-            SnapshotLifecycleMetadata lifecycleMetadata = new SnapshotLifecycleMetadata(snapLifecycles, snapMeta.getOperationMode(), stats);
+            SnapshotLifecycleMetadata lifecycleMetadata = new SnapshotLifecycleMetadata(
+                snapLifecycles,
+                currentSLMMode(currentState),
+                stats
+            );
             Metadata currentMeta = currentState.metadata();
             return ClusterState.builder(currentState)
                 .metadata(Metadata.builder(currentMeta).putCustom(SnapshotLifecycleMetadata.TYPE, lifecycleMetadata))

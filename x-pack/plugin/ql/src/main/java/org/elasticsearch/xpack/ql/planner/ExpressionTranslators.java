@@ -35,6 +35,7 @@ import org.elasticsearch.xpack.ql.expression.predicate.operator.comparison.NullE
 import org.elasticsearch.xpack.ql.expression.predicate.regex.Like;
 import org.elasticsearch.xpack.ql.expression.predicate.regex.RLike;
 import org.elasticsearch.xpack.ql.expression.predicate.regex.RegexMatch;
+import org.elasticsearch.xpack.ql.expression.predicate.regex.WildcardLike;
 import org.elasticsearch.xpack.ql.querydsl.query.BoolQuery;
 import org.elasticsearch.xpack.ql.querydsl.query.ExistsQuery;
 import org.elasticsearch.xpack.ql.querydsl.query.MatchQuery;
@@ -52,12 +53,14 @@ import org.elasticsearch.xpack.ql.querydsl.query.WildcardQuery;
 import org.elasticsearch.xpack.ql.tree.Source;
 import org.elasticsearch.xpack.ql.type.DataTypes;
 import org.elasticsearch.xpack.ql.util.Check;
+import org.elasticsearch.xpack.ql.util.CollectionUtils;
 
 import java.time.OffsetTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -123,7 +126,9 @@ public final class ExpressionTranslators {
                 if (e instanceof Like l) {
                     q = new WildcardQuery(e.source(), targetFieldName, l.pattern().asLuceneWildcard(), l.caseInsensitive());
                 }
-
+                if (e instanceof WildcardLike l) {
+                    q = new WildcardQuery(e.source(), targetFieldName, l.pattern().asLuceneWildcard(), l.caseInsensitive());
+                }
                 if (e instanceof RLike rl) {
                     q = new RegexQuery(e.source(), targetFieldName, rl.pattern().asJavaRegex(), rl.caseInsensitive());
                 }
@@ -461,6 +466,15 @@ public final class ExpressionTranslators {
         if (right == null) {
             return left;
         }
-        return new BoolQuery(source, isAnd, left, right);
+        List<Query> queries;
+        // check if either side is already a bool query to an extra bool query
+        if (left instanceof BoolQuery bool && bool.isAnd() == isAnd) {
+            queries = CollectionUtils.combine(bool.queries(), right);
+        } else if (right instanceof BoolQuery bool && bool.isAnd() == isAnd) {
+            queries = CollectionUtils.combine(bool.queries(), left);
+        } else {
+            queries = Arrays.asList(left, right);
+        }
+        return new BoolQuery(source, isAnd, queries);
     }
 }

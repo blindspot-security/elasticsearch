@@ -14,7 +14,6 @@ import org.elasticsearch.ElasticsearchStatusException;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.logging.LoggerMessageFormat;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.core.Booleans;
 import org.elasticsearch.core.CheckedConsumer;
@@ -49,7 +48,7 @@ import static org.elasticsearch.core.TimeValue.parseTimeValue;
 public class RestRequest implements ToXContent.Params {
 
     // tchar pattern as defined by RFC7230 section 3.2.6
-    private static final Pattern TCHAR_PATTERN = Pattern.compile("[a-zA-z0-9!#$%&'*+\\-.\\^_`|~]+");
+    private static final Pattern TCHAR_PATTERN = Pattern.compile("[a-zA-Z0-9!#$%&'*+\\-.\\^_`|~]+");
 
     private static final AtomicLong requestIdGenerator = new AtomicLong();
 
@@ -145,7 +144,7 @@ public class RestRequest implements ToXContent.Params {
         if (header == null || header.isEmpty()) {
             return null;
         } else if (header.size() > 1) {
-            throw new IllegalArgumentException("Incorrect header [" + headerName + "]. " + "Only one value should be provided");
+            throw new IllegalArgumentException("Incorrect header [" + headerName + "]. Only one value should be provided");
         }
         String rawContentType = header.get(0);
         if (Strings.hasText(rawContentType)) {
@@ -615,9 +614,8 @@ public class RestRequest implements ToXContent.Params {
 
     public static class MediaTypeHeaderException extends RuntimeException {
 
-        private String message;
-        private Set<String> failedHeaderNames;
-        private Object[] params;
+        private final String message;
+        private final Set<String> failedHeaderNames;
 
         MediaTypeHeaderException(final RuntimeException cause, String... failedHeaderNames) {
             super(cause);
@@ -631,7 +629,7 @@ public class RestRequest implements ToXContent.Params {
 
         @Override
         public String getMessage() {
-            return LoggerMessageFormat.format(message, params);
+            return message;
         }
     }
 

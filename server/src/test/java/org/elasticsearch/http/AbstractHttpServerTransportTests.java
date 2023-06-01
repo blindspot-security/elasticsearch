@@ -12,9 +12,11 @@ import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.ActionModule;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.bytes.BytesArray;
-import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.network.NetworkAddress;
 import org.elasticsearch.common.network.NetworkService;
@@ -22,11 +24,16 @@ import org.elasticsearch.common.network.NetworkUtils;
 import org.elasticsearch.common.recycler.Recycler;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.util.MockPageCacheRecycler;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.indices.TestIndexNameExpressionResolver;
+import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.rest.RestChannel;
+import org.elasticsearch.rest.RestControllerTests;
+import org.elasticsearch.rest.RestHeaderDefinition;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestResponse;
 import org.elasticsearch.rest.RestStatus;
@@ -37,18 +44,24 @@ import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.rest.FakeRestRequest;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.tracing.Tracer;
 import org.elasticsearch.transport.BytesRefRecycler;
 import org.elasticsearch.transport.TransportSettings;
+import org.elasticsearch.usage.UsageService;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.mockito.ArgumentCaptor;
 
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,9 +71,19 @@ import java.util.concurrent.TimeUnit;
 import static java.net.InetAddress.getByName;
 import static java.util.Arrays.asList;
 import static org.elasticsearch.http.AbstractHttpServerTransport.resolvePublishPort;
+import static org.elasticsearch.test.LambdaMatchers.transformedMatch;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 public class AbstractHttpServerTransportTests extends ESTestCase {
 
@@ -162,7 +185,8 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                 threadPool,
                 xContentRegistry(),
                 dispatcher,
-                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS)
+                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
+                Tracer.NOOP
             ) {
 
                 @Override
@@ -194,6 +218,183 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
             transport.dispatchRequest(null, null, new Exception());
             assertNull(threadPool.getThreadContext().getHeader("foo_bad"));
             assertNull(threadPool.getThreadContext().getTransient("bar_bad"));
+        }
+    }
+
+    public void testRequestHeadersPopulateThreadContext() {
+        final HttpServerTransport.Dispatcher dispatcher = new HttpServerTransport.Dispatcher() {
+
+            @Override
+            public void dispatchRequest(final RestRequest request, final RestChannel channel, final ThreadContext threadContext) {
+                // specified request headers value are copied into the thread context
+                assertEquals("true", threadContext.getHeader("header.1"));
+                assertEquals("true", threadContext.getHeader("header.2"));
+                // trace start time is also set
+                assertThat(threadContext.getTransient(Task.TRACE_START_TIME), notNullValue());
+                // but unknown headers are not copied at all
+                assertNull(threadContext.getHeader("header.3"));
+            }
+
+            @Override
+            public void dispatchBadRequest(final RestChannel channel, final ThreadContext threadContext, final Throwable cause) {
+                // no request headers are copied in to the context of malformed requests
+                assertNull(threadContext.getHeader("header.1"));
+                assertNull(threadContext.getHeader("header.2"));
+                assertNull(threadContext.getHeader("header.3"));
+                assertNull(threadContext.getTransient(Task.TRACE_START_TIME));
+            }
+
+        };
+        // the set of headers to copy
+        final Set<RestHeaderDefinition> headers = new HashSet<>(
+            Arrays.asList(new RestHeaderDefinition("header.1", true), new RestHeaderDefinition("header.2", true))
+        );
+        // sample request headers to test with
+        final Map<String, List<String>> restHeaders = new HashMap<>();
+        restHeaders.put("header.1", Collections.singletonList("true"));
+        restHeaders.put("header.2", Collections.singletonList("true"));
+        restHeaders.put("header.3", Collections.singletonList("true"));
+        final RestRequest fakeRequest = new FakeRestRequest.Builder(xContentRegistry()).withHeaders(restHeaders).build();
+        final RestControllerTests.AssertingChannel channel = new RestControllerTests.AssertingChannel(
+            fakeRequest,
+            false,
+            RestStatus.BAD_REQUEST
+        );
+
+        try (
+            AbstractHttpServerTransport transport = new AbstractHttpServerTransport(
+                Settings.EMPTY,
+                networkService,
+                recycler,
+                threadPool,
+                xContentRegistry(),
+                dispatcher,
+                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
+                Tracer.NOOP
+            ) {
+
+                @Override
+                protected HttpServerChannel bind(InetSocketAddress hostAddress) {
+                    return null;
+                }
+
+                @Override
+                protected void doStart() {
+
+                }
+
+                @Override
+                protected void stopInternal() {
+
+                }
+
+                @Override
+                public HttpStats stats() {
+                    return null;
+                }
+
+                @Override
+                protected void populatePerRequestThreadContext(RestRequest restRequest, ThreadContext threadContext) {
+                    getFakeActionModule(headers).copyRequestHeadersToThreadContext(restRequest.getHttpRequest(), threadContext);
+                }
+            }
+        ) {
+            transport.dispatchRequest(fakeRequest, channel, null);
+            // headers are "null" here, aka not present, because the thread context changes containing them is to be confined to the request
+            assertNull(threadPool.getThreadContext().getHeader("header.1"));
+            assertNull(threadPool.getThreadContext().getHeader("header.2"));
+            assertNull(threadPool.getThreadContext().getHeader("header.3"));
+            transport.dispatchRequest(null, null, new Exception());
+            // headers are "null" here, aka not present, because the thread context changes containing them is to be confined to the request
+            assertNull(threadPool.getThreadContext().getHeader("header.1"));
+            assertNull(threadPool.getThreadContext().getHeader("header.2"));
+            assertNull(threadPool.getThreadContext().getHeader("header.3"));
+        }
+    }
+
+    /**
+     * Check that the REST controller picks up and propagates W3C trace context headers via the {@link ThreadContext}.
+     * @see <a href="https://www.w3.org/TR/trace-context/">Trace Context - W3C Recommendation</a>
+     */
+    public void testTraceParentAndTraceId() {
+        final String traceParentValue = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        final HttpServerTransport.Dispatcher dispatcher = new HttpServerTransport.Dispatcher() {
+
+            @Override
+            public void dispatchRequest(final RestRequest request, final RestChannel channel, final ThreadContext threadContext) {
+                assertThat(threadContext.getHeader(Task.TRACE_ID), equalTo("0af7651916cd43dd8448eb211c80319c"));
+                assertThat(threadContext.getHeader(Task.TRACE_PARENT_HTTP_HEADER), nullValue());
+                assertThat(threadContext.getTransient("parent_" + Task.TRACE_PARENT_HTTP_HEADER), equalTo(traceParentValue));
+                // request trace start time is also set
+                assertThat(threadContext.getTransient(Task.TRACE_START_TIME), notNullValue());
+            }
+
+            @Override
+            public void dispatchBadRequest(final RestChannel channel, final ThreadContext threadContext, final Throwable cause) {
+                // but they're not copied in for bad requests
+                assertThat(threadContext.getHeader(Task.TRACE_ID), nullValue());
+                assertThat(threadContext.getHeader(Task.TRACE_PARENT_HTTP_HEADER), nullValue());
+                assertThat(threadContext.getTransient("parent_" + Task.TRACE_PARENT_HTTP_HEADER), nullValue());
+                assertThat(threadContext.getTransient(Task.TRACE_START_TIME), nullValue());
+            }
+
+        };
+        // the set of headers to copy
+        Set<RestHeaderDefinition> headers = Set.of(new RestHeaderDefinition(Task.TRACE_PARENT_HTTP_HEADER, false));
+        // sample request headers to test with
+        Map<String, List<String>> restHeaders = new HashMap<>();
+        restHeaders.put(Task.TRACE_PARENT_HTTP_HEADER, Collections.singletonList(traceParentValue));
+        RestRequest fakeRequest = new FakeRestRequest.Builder(xContentRegistry()).withHeaders(restHeaders).build();
+        RestControllerTests.AssertingChannel channel = new RestControllerTests.AssertingChannel(fakeRequest, false, RestStatus.BAD_REQUEST);
+
+        try (
+            AbstractHttpServerTransport transport = new AbstractHttpServerTransport(
+                Settings.EMPTY,
+                networkService,
+                recycler,
+                threadPool,
+                xContentRegistry(),
+                dispatcher,
+                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
+                Tracer.NOOP
+            ) {
+
+                @Override
+                protected HttpServerChannel bind(InetSocketAddress hostAddress) {
+                    return null;
+                }
+
+                @Override
+                protected void doStart() {
+
+                }
+
+                @Override
+                protected void stopInternal() {
+
+                }
+
+                @Override
+                public HttpStats stats() {
+                    return null;
+                }
+
+                @Override
+                protected void populatePerRequestThreadContext(RestRequest restRequest, ThreadContext threadContext) {
+                    getFakeActionModule(headers).copyRequestHeadersToThreadContext(restRequest.getHttpRequest(), threadContext);
+                }
+            }
+        ) {
+            transport.dispatchRequest(fakeRequest, channel, null);
+            // headers are "null" here, aka not present, because the thread context changes containing them is to be confined to the request
+            assertThat(threadPool.getThreadContext().getHeader(Task.TRACE_ID), nullValue());
+            assertThat(threadPool.getThreadContext().getHeader(Task.TRACE_PARENT_HTTP_HEADER), nullValue());
+            assertThat(threadPool.getThreadContext().getTransient("parent_" + Task.TRACE_PARENT_HTTP_HEADER), nullValue());
+            transport.dispatchRequest(null, null, new Exception());
+            // headers are "null" here, aka not present, because the thread context changes containing them is to be confined to the request
+            assertThat(threadPool.getThreadContext().getHeader(Task.TRACE_ID), nullValue());
+            assertThat(threadPool.getThreadContext().getHeader(Task.TRACE_PARENT_HTTP_HEADER), nullValue());
+            assertThat(threadPool.getThreadContext().getTransient("parent_" + Task.TRACE_PARENT_HTTP_HEADER), nullValue());
         }
     }
 
@@ -281,7 +482,8 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                     assertThat(mediaTypeHeaderException.getMessage(), equalTo("Invalid media-type value on headers " + failedHeaderNames));
                 }
             },
-            clusterSettings
+            clusterSettings,
+            Tracer.NOOP
         ) {
             @Override
             protected HttpServerChannel bind(InetSocketAddress hostAddress) {
@@ -331,7 +533,8 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                         channel.sendResponse(emptyResponse(RestStatus.BAD_REQUEST));
                     }
                 },
-                clusterSettings
+                clusterSettings,
+                Tracer.NOOP
             ) {
                 @Override
                 protected HttpServerChannel bind(InetSocketAddress hostAddress) {
@@ -361,16 +564,13 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                     .build()
             );
             MockLogAppender appender = new MockLogAppender();
-            final String traceLoggerName = "org.elasticsearch.http.HttpTracer";
-            try {
-                appender.start();
-                Loggers.addAppender(LogManager.getLogger(traceLoggerName), appender);
+            try (var ignored = appender.capturing(HttpTracer.class)) {
 
                 final String opaqueId = UUIDs.randomBase64UUID(random());
                 appender.addExpectation(
                     new MockLogAppender.PatternSeenEventExpectation(
                         "received request",
-                        traceLoggerName,
+                        HttpTracerTests.HTTP_TRACER_LOGGER,
                         Level.TRACE,
                         "\\[\\d+\\]\\[" + opaqueId + "\\]\\[OPTIONS\\]\\[/internal/test\\] received request from \\[.*"
                     )
@@ -381,20 +581,22 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                 appender.addExpectation(
                     new MockLogAppender.PatternSeenEventExpectation(
                         "sent response",
-                        traceLoggerName,
+                        HttpTracerTests.HTTP_TRACER_LOGGER,
                         Level.TRACE,
                         "\\[\\d+\\]\\["
                             + opaqueId
                             + "\\]\\["
                             + (badRequest ? "BAD_REQUEST" : "OK")
-                            + "\\]\\[null\\]\\[0\\] sent response to \\[.*"
+                            + "\\]\\["
+                            + RestResponse.TEXT_CONTENT_TYPE
+                            + "\\]\\[0\\] sent response to \\[.*"
                     )
                 );
 
                 appender.addExpectation(
                     new MockLogAppender.UnseenEventExpectation(
                         "received other request",
-                        traceLoggerName,
+                        HttpTracerTests.HTTP_TRACER_LOGGER,
                         Level.TRACE,
                         "\\[\\d+\\]\\[" + opaqueId + "\\]\\[OPTIONS\\]\\[/internal/testNotSeen\\] received request from \\[.*"
                     )
@@ -415,7 +617,9 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                     .withInboundException(inboundException)
                     .build();
 
-                transport.incomingRequest(fakeRestRequest.getHttpRequest(), fakeRestRequest.getHttpChannel());
+                try (var httpChannel = fakeRestRequest.getHttpChannel()) {
+                    transport.incomingRequest(fakeRestRequest.getHttpRequest(), httpChannel);
+                }
 
                 final Exception inboundExceptionExcludedPath;
                 if (randomBoolean()) {
@@ -432,11 +636,10 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                     .withInboundException(inboundExceptionExcludedPath)
                     .build();
 
-                transport.incomingRequest(fakeRestRequestExcludedPath.getHttpRequest(), fakeRestRequestExcludedPath.getHttpChannel());
+                try (var httpChannel = fakeRestRequestExcludedPath.getHttpChannel()) {
+                    transport.incomingRequest(fakeRestRequestExcludedPath.getHttpRequest(), httpChannel);
+                }
                 appender.assertAllExpectationsMatched();
-            } finally {
-                Loggers.removeAppender(LogManager.getLogger(traceLoggerName), appender);
-                appender.stop();
             }
         }
     }
@@ -484,7 +687,8 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                         channel.sendResponse(emptyResponse(RestStatus.BAD_REQUEST));
                     }
                 },
-                clusterSettings
+                clusterSettings,
+                Tracer.NOOP
             ) {
                 @Override
                 protected HttpServerChannel bind(InetSocketAddress hostAddress) {
@@ -540,7 +744,8 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                         channel.sendResponse(emptyResponse(RestStatus.BAD_REQUEST));
                     }
                 },
-                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS)
+                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
+                Tracer.NOOP
             ) {
 
                 @Override
@@ -567,10 +772,16 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
             transport.incomingRequest(fakeRestRequest.getHttpRequest(), fakeRestRequest.getHttpChannel());
 
             HttpStats httpStats = transport.stats();
-            assertThat(httpStats.getClientStats().size(), equalTo(1));
-            assertThat(httpStats.getClientStats().get(0).remoteAddress, equalTo(NetworkAddress.format(remoteAddress)));
-            assertThat(httpStats.getClientStats().get(0).opaqueId, equalTo(opaqueId));
-            assertThat(httpStats.getClientStats().get(0).lastUri, equalTo("/internal/stats_test"));
+            assertThat(
+                httpStats.getClientStats(),
+                contains(
+                    allOf(
+                        transformedMatch(HttpStats.ClientStats::remoteAddress, equalTo(NetworkAddress.format(remoteAddress))),
+                        transformedMatch(HttpStats.ClientStats::opaqueId, equalTo(opaqueId)),
+                        transformedMatch(HttpStats.ClientStats::lastUri, equalTo("/internal/stats_test"))
+                    )
+                )
+            );
 
             remoteAddress = new InetSocketAddress(randomIp(randomBoolean()), randomIntBetween(1, 65535));
             opaqueId = UUIDs.randomBase64UUID(random());
@@ -585,13 +796,13 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
             assertThat(httpStats.getClientStats().size(), equalTo(2));
 
             // due to non-deterministic ordering in map iteration, the second client may not be the second entry in the list
-            HttpStats.ClientStats secondClientStats = httpStats.getClientStats().get(0).opaqueId.equals(opaqueId)
+            HttpStats.ClientStats secondClientStats = httpStats.getClientStats().get(0).opaqueId().equals(opaqueId)
                 ? httpStats.getClientStats().get(0)
                 : httpStats.getClientStats().get(1);
 
-            assertThat(secondClientStats.remoteAddress, equalTo(NetworkAddress.format(remoteAddress)));
-            assertThat(secondClientStats.opaqueId, equalTo(opaqueId));
-            assertThat(secondClientStats.lastUri, equalTo("/internal/stats_test2"));
+            assertThat(secondClientStats.remoteAddress(), equalTo(NetworkAddress.format(remoteAddress)));
+            assertThat(secondClientStats.opaqueId(), equalTo(opaqueId));
+            assertThat(secondClientStats.lastUri(), equalTo("/internal/stats_test2"));
         }
     }
 
@@ -615,7 +826,8 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
                         channel.sendResponse(emptyResponse(RestStatus.BAD_REQUEST));
                     }
                 },
-                clusterSettings
+                clusterSettings,
+                Tracer.NOOP
             ) {
 
                 @Override
@@ -644,7 +856,7 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
             // HTTP client stats should default to enabled
             HttpStats httpStats = transport.stats();
             assertThat(httpStats.getClientStats().size(), equalTo(1));
-            assertThat(httpStats.getClientStats().get(0).opaqueId, equalTo(opaqueId));
+            assertThat(httpStats.getClientStats().get(0).opaqueId(), equalTo(opaqueId));
 
             clusterSettings.applySettings(
                 Settings.builder().put(HttpTransportSettings.SETTING_HTTP_CLIENT_STATS_ENABLED.getKey(), false).build()
@@ -686,23 +898,68 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    public void testSetGracefulClose() {
+        try (
+            AbstractHttpServerTransport transport = new AbstractHttpServerTransport(
+                Settings.EMPTY,
+                networkService,
+                recycler,
+                threadPool,
+                xContentRegistry(),
+                new HttpServerTransport.Dispatcher() {
+                    @Override
+                    public void dispatchRequest(RestRequest request, RestChannel channel, ThreadContext threadContext) {
+                        channel.sendResponse(emptyResponse(RestStatus.OK));
+                    }
+
+                    @Override
+                    public void dispatchBadRequest(RestChannel channel, ThreadContext threadContext, Throwable cause) {
+                        channel.sendResponse(emptyResponse(RestStatus.BAD_REQUEST));
+                    }
+                },
+                new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
+                Tracer.NOOP
+            ) {
+
+                @Override
+                protected HttpServerChannel bind(InetSocketAddress hostAddress) {
+                    return null;
+                }
+
+                @Override
+                protected void doStart() {}
+
+                @Override
+                protected void stopInternal() {}
+            }
+        ) {
+            final TestHttpRequest httpRequest = new TestHttpRequest(HttpRequest.HttpVersion.HTTP_1_1, RestRequest.Method.GET, "/");
+
+            HttpChannel httpChannel = mock(HttpChannel.class);
+            transport.incomingRequest(httpRequest, httpChannel);
+
+            var response = ArgumentCaptor.forClass(TestHttpResponse.class);
+            var listener = ArgumentCaptor.forClass(ActionListener.class);
+            verify(httpChannel).sendResponse(response.capture(), listener.capture());
+
+            listener.getValue().onResponse(null);
+            assertThat(response.getValue().containsHeader(DefaultRestChannel.CONNECTION), is(false));
+            verify(httpChannel, never()).close();
+
+            httpChannel = mock(HttpChannel.class);
+            transport.gracefullyCloseConnections();
+            transport.incomingRequest(httpRequest, httpChannel);
+            verify(httpChannel).sendResponse(response.capture(), listener.capture());
+
+            listener.getValue().onResponse(null);
+            assertThat(response.getValue().headers().get(DefaultRestChannel.CONNECTION), containsInAnyOrder(DefaultRestChannel.CLOSE));
+            verify(httpChannel).close();
+        }
+    }
+
     private static RestResponse emptyResponse(RestStatus status) {
-        return new RestResponse() {
-            @Override
-            public String contentType() {
-                return null;
-            }
-
-            @Override
-            public BytesReference content() {
-                return BytesArray.EMPTY;
-            }
-
-            @Override
-            public RestStatus status() {
-                return status;
-            }
-        };
+        return new RestResponse(status, RestResponse.TEXT_CONTENT_TYPE, BytesArray.EMPTY);
     }
 
     private TransportAddress address(String host, int port) throws UnknownHostException {
@@ -719,5 +976,31 @@ public class AbstractHttpServerTransportTests extends ESTestCase {
             addresses.add(randomAddress());
         }
         return addresses;
+    }
+
+    private ActionModule getFakeActionModule(Set<RestHeaderDefinition> headersToCopy) {
+        SettingsModule settings = new SettingsModule(Settings.EMPTY);
+        ActionPlugin copyHeadersPlugin = new ActionPlugin() {
+            @Override
+            public Collection<RestHeaderDefinition> getRestHeaders() {
+                return headersToCopy;
+            }
+        };
+        return new ActionModule(
+            settings.getSettings(),
+            TestIndexNameExpressionResolver.newInstance(threadPool.getThreadContext()),
+            settings.getIndexScopedSettings(),
+            settings.getClusterSettings(),
+            settings.getSettingsFilter(),
+            threadPool,
+            List.of(copyHeadersPlugin),
+            null,
+            null,
+            new UsageService(),
+            null,
+            null,
+            mock(ClusterService.class),
+            List.of()
+        );
     }
 }

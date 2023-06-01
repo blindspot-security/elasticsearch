@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.security.authz.store;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ContextPreservingActionListener;
 import org.elasticsearch.common.cache.Cache;
@@ -133,6 +132,37 @@ public class RoleDescriptorStore implements RoleReferenceResolver {
         }));
     }
 
+    @Override
+    public void resolveCrossClusterAccessRoleReference(
+        RoleReference.CrossClusterAccessRoleReference crossClusterAccessRoleReference,
+        ActionListener<RolesRetrievalResult> listener
+    ) {
+        final Set<RoleDescriptor> roleDescriptors = crossClusterAccessRoleReference.getRoleDescriptorsBytes().toRoleDescriptors();
+        for (RoleDescriptor roleDescriptor : roleDescriptors) {
+            if (roleDescriptor.hasPrivilegesOtherThanIndex()) {
+                final String message = "Role descriptor for cross cluster access can only contain index privileges "
+                    + "but other privileges found for subject ["
+                    + crossClusterAccessRoleReference.getUserPrincipal()
+                    + "]";
+                logger.debug("{}. Invalid role descriptor: [{}]", message, roleDescriptor);
+                listener.onFailure(new IllegalArgumentException(message));
+                return;
+            }
+        }
+        if (roleDescriptors.isEmpty()) {
+            logger.debug(
+                () -> "Cross cluster access role reference ["
+                    + crossClusterAccessRoleReference.id()
+                    + "] resolved to an empty role descriptor set"
+            );
+            listener.onResponse(RolesRetrievalResult.EMPTY);
+            return;
+        }
+        final RolesRetrievalResult rolesRetrievalResult = new RolesRetrievalResult();
+        rolesRetrievalResult.addDescriptors(Set.copyOf(roleDescriptors));
+        listener.onResponse(rolesRetrievalResult);
+    }
+
     private void resolveRoleNames(Set<String> roleNames, ActionListener<RolesRetrievalResult> listener) {
         roleDescriptors(roleNames, ActionListener.wrap(rolesRetrievalResult -> {
             logDeprecatedRoles(rolesRetrievalResult.getRoleDescriptors());
@@ -240,10 +270,7 @@ public class RoleDescriptorStore implements RoleReferenceResolver {
                         roleNames.remove(descriptor.getName());
                     }
                 } else {
-                    logger.warn(
-                        new ParameterizedMessage("role [{}] retrieval failed from [{}]", roleNames, rolesProvider),
-                        result.getFailure()
-                    );
+                    logger.warn(() -> format("role [%s] retrieval failed from [%s]", roleNames, rolesProvider), result.getFailure());
                     rolesResult.setFailure();
                 }
                 providerListener.onResponse(result);

@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.ml.job.task;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchStatusException;
 import org.elasticsearch.ResourceNotFoundException;
@@ -67,6 +66,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
 import static org.elasticsearch.xpack.core.ml.MachineLearningField.MIN_CHECKED_SUPPORTED_SNAPSHOT_VERSION;
@@ -111,14 +111,15 @@ public class OpenJobPersistentTasksExecutor extends AbstractJobPersistentTasksEx
         MlMemoryTracker memoryTracker,
         Client client,
         IndexNameExpressionResolver expressionResolver,
-        XPackLicenseState licenseState
+        XPackLicenseState licenseState,
+        boolean includeNodeInfo
     ) {
         super(MlTasks.JOB_TASK_NAME, MachineLearning.UTILITY_THREAD_POOL_NAME, settings, clusterService, memoryTracker, expressionResolver);
         this.autodetectProcessManager = Objects.requireNonNull(autodetectProcessManager);
         this.datafeedConfigProvider = Objects.requireNonNull(datafeedConfigProvider);
         this.client = Objects.requireNonNull(client);
         this.jobResultsProvider = new JobResultsProvider(client, settings, expressionResolver);
-        this.auditor = new AnomalyDetectionAuditor(client, clusterService);
+        this.auditor = new AnomalyDetectionAuditor(client, clusterService, includeNodeInfo);
         this.licenseState = licenseState;
         clusterService.addListener(event -> clusterState = event.state());
     }
@@ -219,7 +220,7 @@ public class OpenJobPersistentTasksExecutor extends AbstractJobPersistentTasksEx
         validateJobAndId(jobId, job);
         // If we already know that we can't find an ml node because all ml nodes are running at capacity or
         // simply because there are no ml nodes in the cluster then we fail quickly here:
-        PersistentTasksCustomMetadata.Assignment assignment = getAssignment(params, clusterState.nodes(), clusterState);
+        PersistentTasksCustomMetadata.Assignment assignment = getAssignment(params, clusterState.nodes().getAllNodes(), clusterState);
         if (assignment.equals(AWAITING_UPGRADE)) {
             throw makeCurrentlyBeingUpgradedException(logger, params.getJobId());
         }
@@ -368,11 +369,7 @@ public class OpenJobPersistentTasksExecutor extends AbstractJobPersistentTasksEx
                     e -> {
                         if (autodetectProcessManager.isNodeDying() == false) {
                             logger.error(
-                                new ParameterizedMessage(
-                                    "[{}] failed to stop associated datafeed [{}] after job failure",
-                                    jobId,
-                                    runningDatafeedId
-                                ),
+                                () -> format("[%s] failed to stop associated datafeed [%s] after job failure", jobId, runningDatafeedId),
                                 e
                             );
                             auditor.error(jobId, "failed to stop associated datafeed after job failure");

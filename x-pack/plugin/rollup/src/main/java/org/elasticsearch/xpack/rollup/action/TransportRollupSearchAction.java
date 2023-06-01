@@ -8,8 +8,7 @@ package org.elasticsearch.xpack.rollup.action;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.MultiSearchRequest;
 import org.elasticsearch.action.search.MultiSearchResponse;
@@ -72,6 +71,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import static org.elasticsearch.core.Strings.format;
 
 public class TransportRollupSearchAction extends TransportAction<SearchRequest, SearchResponse> {
 
@@ -271,10 +272,10 @@ public class TransportRollupSearchAction extends TransportAction<SearchRequest, 
     ) throws IOException {
         Writeable.Writer<SearchSourceBuilder> writer = (out, value) -> value.writeTo(out);
         try (BytesStreamOutput output = new BytesStreamOutput()) {
-            output.setVersion(Version.CURRENT);
+            output.setTransportVersion(TransportVersion.CURRENT);
             writer.write(output, original);
             try (StreamInput in = new NamedWriteableAwareStreamInput(output.bytes().streamInput(), namedWriteableRegistry)) {
-                in.setVersion(Version.CURRENT);
+                in.setTransportVersion(TransportVersion.CURRENT);
                 return reader.read(in);
             }
         }
@@ -461,11 +462,7 @@ public class TransportRollupSearchAction extends TransportAction<SearchRequest, 
                         channel.sendResponse(e);
                     } catch (Exception e1) {
                         logger.warn(
-                            (org.apache.logging.log4j.util.Supplier<?>) () -> new ParameterizedMessage(
-                                "Failed to send error response for action [{}] and request [{}]",
-                                actionName,
-                                request
-                            ),
+                            () -> format("Failed to send error response for action [%s] and request [%s]", actionName, request),
                             e1
                         );
                     }

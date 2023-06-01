@@ -14,6 +14,7 @@ import org.elasticsearch.xpack.core.security.authz.privilege.ClusterPrivilegeRes
 import org.elasticsearch.xpack.core.security.authz.privilege.IndexPrivilege;
 import org.elasticsearch.xpack.core.security.support.MetadataUtils;
 
+import java.util.Arrays;
 import java.util.Set;
 
 import static org.elasticsearch.action.ValidateActions.addValidationError;
@@ -51,6 +52,17 @@ public class RoleDescriptorRequestValidator {
                 }
             }
         }
+        final RoleDescriptor.RemoteIndicesPrivileges[] remoteIndicesPrivileges = roleDescriptor.getRemoteIndicesPrivileges();
+        for (RoleDescriptor.RemoteIndicesPrivileges ridp : remoteIndicesPrivileges) {
+            if (Arrays.asList(ridp.remoteClusters()).contains("")) {
+                validationException = addValidationError("remote index cluster alias cannot be an empty string", validationException);
+            }
+            try {
+                IndexPrivilege.get(Set.of(ridp.indicesPrivileges().getPrivileges()));
+            } catch (IllegalArgumentException ile) {
+                validationException = addValidationError(ile.getMessage(), validationException);
+            }
+        }
         if (roleDescriptor.getApplicationPrivileges() != null) {
             for (RoleDescriptor.ApplicationResourcePrivileges privilege : roleDescriptor.getApplicationPrivileges()) {
                 try {
@@ -72,6 +84,9 @@ public class RoleDescriptorRequestValidator {
                 "role descriptor metadata keys may not start with [" + MetadataUtils.RESERVED_PREFIX + "]",
                 validationException
             );
+        }
+        if (roleDescriptor.hasWorkflowsRestriction()) {
+            // TODO: Validate workflow names here!
         }
         return validationException;
     }

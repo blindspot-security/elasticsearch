@@ -5,6 +5,7 @@
  * in compliance with, at your election, the Elastic License 2.0 or the Server
  * Side Public License, v 1.
  */
+apply plugin: 'elasticsearch.publish'
 
 dependencies {
   api 'io.github.blindspot-security:joni:2.5.8'

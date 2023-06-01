@@ -8,8 +8,7 @@
 
 package org.elasticsearch.indices.cluster;
 
-import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.admin.cluster.reroute.ClusterRerouteRequest;
 import org.elasticsearch.action.admin.indices.close.CloseIndexRequest;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
@@ -29,6 +28,7 @@ import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodeRole;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.RoutingTable;
 import org.elasticsearch.cluster.routing.ShardRouting;
@@ -122,8 +122,8 @@ public class IndicesClusterStateServiceRandomUpdatesTests extends AbstractIndice
                     indicesClusterStateService.applyClusterState(event);
                 } catch (AssertionError error) {
                     logger.error(
-                        new ParameterizedMessage(
-                            "failed to apply change on [{}].\n ***  Previous state ***\n{}\n ***  New state ***\n{}",
+                        () -> format(
+                            "failed to apply change on [%s].\n ***  Previous state ***\n%s\n ***  New state ***\n%s",
                             node,
                             event.previousState(),
                             event.state()
@@ -158,7 +158,7 @@ public class IndicesClusterStateServiceRandomUpdatesTests extends AbstractIndice
         // a cluster state derived from the initial state that includes a created index
         String name = "index_" + randomAlphaOfLength(8).toLowerCase(Locale.ROOT);
         ShardRoutingState[] replicaStates = new ShardRoutingState[randomIntBetween(0, 3)];
-        Arrays.fill(replicaStates, ShardRoutingState.INITIALIZING);
+        Arrays.fill(replicaStates, ShardRoutingState.UNASSIGNED);
         ClusterState stateWithIndex = ClusterStateCreationUtils.state(name, randomBoolean(), ShardRoutingState.INITIALIZING, replicaStates);
 
         // the initial state which is derived from the newly created cluster state but doesn't contain the index
@@ -469,7 +469,7 @@ public class IndicesClusterStateServiceRandomUpdatesTests extends AbstractIndice
             if (randomBoolean()) {
                 // add node
                 if (state.nodes().getSize() < 10) {
-                    state = cluster.addNode(state, createNode());
+                    state = cluster.addNode(state, createNode(), TransportVersion.CURRENT);
                     updateNodes(state, clusterStateServiceMap, indicesServiceSupplier);
                 }
             } else {
@@ -482,7 +482,7 @@ public class IndicesClusterStateServiceRandomUpdatesTests extends AbstractIndice
                     }
                     if (randomBoolean()) {
                         // and add it back
-                        state = cluster.addNode(state, discoveryNode);
+                        state = cluster.addNode(state, discoveryNode, TransportVersion.CURRENT);
                         updateNodes(state, clusterStateServiceMap, indicesServiceSupplier);
                     }
                 }
@@ -499,8 +499,8 @@ public class IndicesClusterStateServiceRandomUpdatesTests extends AbstractIndice
     protected DiscoveryNode createNode(DiscoveryNodeRole... mustHaveRoles) {
         Set<DiscoveryNodeRole> roles = new HashSet<>(randomSubsetOf(DiscoveryNodeRole.roles()));
         Collections.addAll(roles, mustHaveRoles);
-        final String id = String.format(Locale.ROOT, "node_%03d", nodeIdGenerator.incrementAndGet());
-        return new DiscoveryNode(id, id, buildNewFakeTransportAddress(), Collections.emptyMap(), roles, Version.CURRENT);
+        final String id = format("node_%03d", nodeIdGenerator.incrementAndGet());
+        return DiscoveryNodeUtils.builder(id).name(id).roles(roles).build();
     }
 
     private static ClusterState adaptClusterStateToLocalNode(ClusterState state, DiscoveryNode node) {
